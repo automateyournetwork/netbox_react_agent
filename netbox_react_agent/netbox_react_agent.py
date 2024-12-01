@@ -283,12 +283,6 @@ def chat_page():
     st.title("Chat with NetBox AI Agent")
     user_input = st.text_input("Ask NetBox a question:", key="user_input")
 
-    # Ensure the agent is initialized
-    if "OPENAI_API_KEY" not in st.session_state:
-        st.error("Please configure NetBox and OpenAI settings first!")
-        st.session_state['page'] = "configure"
-        return
-
     initialize_agent()
 
     # Initialize session state variables if not already set
