@@ -54,5 +54,221 @@
     {
         "URL": "/api/dcim/racks/",
         "Name": "Racks"
+    },
+    {
+        "URL": "/api/dcim/console-port-templates/",
+        "Name": "Console Port Templates"
+    },
+    {
+        "URL": "/api/dcim/console-ports/",
+        "Name": "Console Ports"
+    },
+    {
+        "URL": "/api/tenancy/contact-assignments/",
+        "Name": "Contact Assignments"
+    },
+    {
+        "URL": "/api/tenancy/contact-groups/",
+        "Name": "Contact Groups"
+    },
+    {
+        "URL": "/api/tenancy/contact-roles/",
+        "Name": "Contact Roles"
+    },
+    {
+        "URL": "/api/tenancy/contacts/",
+        "Name": "Contacts"
+    },
+    {
+        "URL": "/api/dcim/device-bay-templates/",
+        "Name": "Device Bay Templates"
+    },
+    {
+        "URL": "/api/dcim/device-bays/",
+        "Name": "Device Bays"
+    },
+    {
+        "URL": "/api/dcim/device-roles/",
+        "Name": "Device Roles"
+    },
+    {
+        "URL": "/api/dcim/front-port-templates/",
+        "Name": "Front Port Templates"
+    },
+    {
+        "URL": "/api/dcim/front-ports/",
+        "Name": "Front Ports"
+    },
+    {
+        "URL": "/api/users/groups/",
+        "Name": "Groups"
+    },
+    {
+        "URL": "/api/dcim/interface-templates/",
+        "Name": "Interface Templates"
+    },
+    {
+        "URL": "/api/dcim/interfaces/",
+        "Name": "Interfaces"
+    },
+    {
+        "URL": "/api/dcim/inventory-items/",
+        "Name": "Inventory Items"
+    },
+    {
+        "URL": "/api/ipam/ip-ranges/",
+        "Name": "Ip Ranges"
+    },
+    {
+        "URL": "/api/dcim/locations/",
+        "Name": "Locations"
+    },
+    {
+        "URL": "/api/dcim/manufacturers/",
+        "Name": "Manufacturers"
+    },
+    {
+        "URL": "/api/dcim/module-bay-templates/",
+        "Name": "Module Bay Templates"
+    },
+    {
+        "URL": "/api/dcim/module-bays/",
+        "Name": "Module Bays"
+    },
+    {
+        "URL": "/api/dcim/module-types/",
+        "Name": "Module Types"
+    },
+    {
+        "URL": "/api/dcim/modules/",
+        "Name": "Modules"
+    },
+    {
+        "URL": "/api/dcim/platforms/",
+        "Name": "Platforms"
+    },
+    {
+        "URL": "/api/dcim/power-feeds/",
+        "Name": "Power Feeds"
+    },
+    {
+        "URL": "/api/dcim/power-outlet-templates/",
+        "Name": "Power Outlet Templates"
+    },
+    {
+        "URL": "/api/dcim/power-outlets/",
+        "Name": "Power Outlets"
+    },
+    {
+        "URL": "/api/dcim/power-panels/",
+        "Name": "Power Panels"
+    },
+    {
+        "URL": "/api/dcim/power-port-templates/",
+        "Name": "Power Port Templates"
+    },
+    {
+        "URL": "/api/dcim/power-ports/",
+        "Name": "Power Ports"
+    },
+    {
+        "URL": "/api/ipam/prefixes/",
+        "Name": "Prefixes"
+    },
+    {
+        "URL": "/api/circuits/provider-networks/",
+        "Name": "Provider Networks"
+    },
+    {
+        "URL": "/api/circuits/providers/",
+        "Name": "Providers"
+    },
+    {
+        "URL": "/api/dcim/rack-reservations/",
+        "Name": "Rack Reservations"
+    },
+    {
+        "URL": "/api/dcim/rack-roles/",
+        "Name": "Rack Roles"
+    },
+    {
+        "URL": "/api/dcim/rear-port-templates/",
+        "Name": "Rear Port Templates"
+    },
+    {
+        "URL": "/api/dcim/rear-ports/",
+        "Name": "Rear Ports"
+    },
+    {
+        "URL": "/api/dcim/regions/",
+        "Name": "Regions"
+    },
+    {
+        "URL": "/api/ipam/rirs/",
+        "Name": "Rirs"
+    },
+    {
+        "URL": "/api/ipam/roles/",
+        "Name": "Roles"
+    },
+    {
+        "URL": "/api/ipam/route-targets/",
+        "Name": "Route Targets"
+    },
+    {
+        "URL": "/api/ipam/service-templates/",
+        "Name": "Service Templates"
+    },
+    {
+        "URL": "/api/ipam/services/",
+        "Name": "Services"
+    },
+    {
+        "URL": "/api/dcim/site-groups/",
+        "Name": "Site Groups"
+    },
+    {
+        "URL": "/api/status/",
+        "Name": "Status"
+    },
+    {
+        "URL": "/api/tenancy/tenant-groups/",
+        "Name": "Tenant Groups"
+    },
+    {
+        "URL": "/api/tenancy/tenants/",
+        "Name": "Tenants"
+    },
+    {
+        "URL": "/api/users/tokens/",
+        "Name": "Tokens"
+    },
+    {
+        "URL": "/api/users/users/",
+        "Name": "Users"
+    },
+    {
+        "URL": "/api/dcim/virtual-chassis/",
+        "Name": "Virtual Chassis"
+    },
+    {
+        "URL": "/api/virtualization/interfaces/",
+        "Name": "Interfaces"
+    },
+    {
+        "URL": "/api/virtualization/virtual-machines/",
+        "Name": "Virtual Machines"
+    },
+    {
+        "URL": "/api/ipam/vlan-groups/",
+        "Name": "Vlan Groups"
+    },
+    {
+        "URL": "/api/ipam/vlans/",
+        "Name": "Vlans"
+    },
+    {
+        "URL": "/api/ipam/vrfs/",
+        "Name": "Vrfs"
     }
 ]

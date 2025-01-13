@@ -4,6 +4,7 @@ import logging
 import requests
 import difflib
 import streamlit as st
+from langchain.tools import Tool  # Import Tool instead of using @tool decorator
 from langchain_community.llms import Ollama
 from langchain.agents import AgentExecutor, create_react_agent
 from langchain.prompts import PromptTemplate
@@ -29,8 +30,9 @@ class NetBoxController:
         }
 
     def get_api(self, api_url: str, params: dict = None):
+        full_url = f"{self.netbox}/{api_url.lstrip('/')}"  # Fix URL construction
         response = requests.get(
-            f"{self.netbox}{api_url}",
+            full_url,
             headers=self.headers,
             params=params,
             verify=False
@@ -92,93 +94,89 @@ def check_url_support(api_url: str) -> dict:
     else:
         return {"status": "unsupported", "message": f"The input '{api_url}' is not supported."}
 
-
-# Tools for interacting with NetBox
-@tool
-def discover_apis(dummy_input: str = None) -> dict:
-    """Discover available NetBox APIs from a local JSON file."""
+def discover_apis():
+    """
+    Load and return the available NetBox APIs from the JSON file.
+    """
+    file_path = 'netbox_apis.json'
+    
+    if not os.path.exists(file_path):
+        return {"error": f"API JSON file '{file_path}' not found."}
+    
     try:
-        if not os.path.exists("netbox_apis.json"):
-            return {"error": "API JSON file not found. Please ensure 'netbox_apis.json' exists in the project directory."}
-        
-        with open("netbox_apis.json", "r") as f:
+        with open(file_path, 'r') as f:
             data = json.load(f)
-        return {"apis": data, "message": "APIs successfully loaded from JSON file"}
+        return {"apis": data, "message": "APIs successfully loaded from JSON file."}
     except Exception as e:
-        return {"error": f"An error occurred while loading the APIs: {str(e)}"}
+        return {"error": f"Error loading APIs: {str(e)}"}
 
+# Discover APIs Tool
+discover_apis_tool = Tool(
+    name="discover_apis",
+    description="Discover available NetBox APIs from a local JSON file.",
+    func=lambda _: discover_apis()
+)
 
-@tool
-def check_supported_url_tool(api_url: str) -> dict:
-    """Check if an API URL or Name is supported by NetBox."""
-    result = check_url_support(api_url)
-    if result.get('status') == 'supported':
-        closest_url = result['closest_url']
-        closest_name = result['closest_name']
-        return {
-            "status": "supported",
-            "message": f"The closest supported API URL is '{closest_url}' ({closest_name}).",
-            "action": {
-                "next_tool": "get_netbox_data_tool",
-                "input": closest_url
-            }
-        }
-    return result
+# Tool to check if a URL or name is valid
+check_supported_url_tool = Tool(
+    name="check_supported_url_tool",
+    description="Check if an API URL or Name is supported by NetBox. Use this to find the correct API endpoint.",
+    func=lambda query: check_url_support(query)
+)
 
+# Enhanced to ensure correct URL lookup before making API calls
+get_netbox_data_tool = Tool(
+    name="get_netbox_data_tool",
+    description="Fetch data from NetBox using the correct API URL. Use 'check_supported_url_tool' first.",
+    func=lambda api_url: fetch_with_lookup(api_url)
+)
 
-@tool
-def get_netbox_data_tool(api_url: str) -> dict:
-    """Fetch data from NetBox."""
-    try:
-        netbox_controller = NetBoxController(
-            netbox_url=os.getenv("NETBOX_URL"),
-            api_token=os.getenv("NETBOX_TOKEN")
-        )
-        data = netbox_controller.get_api(api_url)
-        return data
-    except requests.HTTPError as e:
-        return {"error": f"Failed to fetch data from NetBox: {str(e)}"}
-    except Exception as e:
-        return {"error": f"An unexpected error occurred: {str(e)}"}
+def fetch_with_lookup(api_url: str):
+    """
+    Check if the API URL is supported before making a request.
+    """
+    # Step 1: Lookup the correct API endpoint
+    lookup_result = check_url_support(api_url)
+    
+    if lookup_result.get("status") == "supported":
+        correct_url = lookup_result["closest_url"]
+        try:
+            netbox_controller = NetBoxController(
+                netbox_url=os.getenv("NETBOX_URL"),
+                api_token=os.getenv("NETBOX_TOKEN")
+            )
+            # Step 2: Fetch the data
+            data = netbox_controller.get_api(correct_url)
+            
+            # Step 3: Count circuits if applicable
+            if 'count' in data:
+                return {"status": "success", "message": f"You have {data['count']} circuits in NetBox."}
+            return {"status": "success", "message": "Data fetched successfully."}
 
+        except Exception as e:
+            return {"error": f"Failed to fetch data: {str(e)}"}
+    
+    return {"error": f"Unsupported API URL. Closest match: {lookup_result.get('closest_url')}"}
 
-@tool
-def create_netbox_data_tool(input: str) -> dict:
-    """Create new data in NetBox."""
-    try:
-        data = json.loads(input)
-        api_url = data.get("api_url")
-        payload = data.get("payload")
+# Create NetBox Data Tool
+create_netbox_data_tool = Tool(
+    name="create_netbox_data_tool",
+    description="Create new data in NetBox.",
+    func=lambda input_data: NetBoxController(
+        netbox_url=os.getenv("NETBOX_URL"),
+        api_token=os.getenv("NETBOX_TOKEN")
+    ).post_api(input_data.get("api_url"), input_data.get("payload"))
+)
 
-        if not api_url or not payload:
-            raise ValueError("Both 'api_url' and 'payload' must be provided.")
-
-        if not isinstance(payload, dict):
-            raise ValueError("Payload must be a dictionary.")
-
-        netbox_controller = NetBoxController(
-            netbox_url=os.getenv("NETBOX_URL"),
-            api_token=os.getenv("NETBOX_TOKEN")
-        )
-        return netbox_controller.post_api(api_url, payload)
-    except Exception as e:
-        return {"error": f"An error occurred in create_netbox_data_tool: {str(e)}"}
-
-
-@tool
-def delete_netbox_data_tool(api_url: str) -> dict:
-    """Delete data from NetBox."""
-    try:
-        netbox_controller = NetBoxController(
-            netbox_url=os.getenv("NETBOX_URL"),
-            api_token=os.getenv("NETBOX_TOKEN")
-        )
-        return netbox_controller.delete_api(api_url)
-    except requests.HTTPError as e:
-        return {"error": f"Failed to delete data from NetBox: {str(e)}"}
-    except Exception as e:
-        return {"error": f"An unexpected error occurred: {str(e)}"}
-
+# Delete NetBox Data Tool
+delete_netbox_data_tool = Tool(
+    name="delete_netbox_data_tool",
+    description="Delete data from NetBox.",
+    func=lambda api_url: NetBoxController(
+        netbox_url=os.getenv("NETBOX_URL"),
+        api_token=os.getenv("NETBOX_TOKEN")
+    ).delete_api(api_url)
+)
 
 def process_agent_response(response):
     if response and response.get("status") == "supported" and "next_tool" in response.get("action", {}):
@@ -219,56 +217,60 @@ def initialize_agent():
     global llm, agent_executor
     if not llm:
         # Initialize the LLM with the API key from session state
-        llm = Ollama(model="phi4", base_url="http://ollama:11434")
+        llm = Ollama(model="llama3.1", base_url="http://ollama:11434")
 
         # Define tools
-        tools = [discover_apis, check_supported_url_tool, get_netbox_data_tool, create_netbox_data_tool, delete_netbox_data_tool]
+        tools = [
+            discover_apis_tool,
+            check_supported_url_tool,
+            get_netbox_data_tool,
+            create_netbox_data_tool,
+            delete_netbox_data_tool
+        ]
 
-        # Create the prompt template
-        tool_descriptions = render_text_description(tools)
-        # Create the PromptTemplate
-        template = """
-        Assistant is a network assistant capable of managing NetBox data using CRUD operations.
+        # Extract tool names for the prompt
+        tool_names = ", ".join([tool.name for tool in tools])
+        tool_descriptions = "\n".join([f"{tool.name}: {tool.description}" for tool in tools])
+
+        prompt_template = PromptTemplate(
+        input_variables=["input", "agent_scratchpad", "tool_names", "tools"],
+        template="""
+        You are a helpful network assistant that manages NetBox data with CRUD operations.
+
+        **TASK FLOW:**
+
+        1. **ALWAYS** check the correct API endpoint using the 'discover_apis' or 'check_supported_url_tool'.
+        2. Once the correct API URL is found, **fetch** the data using the 'get_netbox_data_tool'.
+        3. Analyze the data and **answer** the user.
 
         TOOLS:
-        - discover_apis: Discovers available NetBox APIs from a local JSON file.
-        - check_supported_url_tool: Checks if an API URL or Name is supported by NetBox.
-        - get_netbox_data_tool: Fetches data from NetBox using the specified API URL.
-        - create_netbox_data_tool: Creates new data in NetBox using the specified API URL and payload.
-        - delete_netbox_data_tool: Deletes data from NetBox using the specified API URL.
+        {tools}
 
-        GUIDELINES:
-        1. Use 'check_supported_url_tool' to validate ambiguous or unknown URLs or Names.
-        2. If certain about the URL, directly use 'get_netbox_data_tool', 'create_netbox_data_tool', or 'delete_netbox_data_tool'.
-        3. Follow a structured response format to ensure consistency.
+        Available tool names: {tool_names}
 
-        FORMAT:
-        Thought: [Your thought process]
+        Use the following format:
+        Thought: [Reasoning]
         Action: [Tool Name]
-        Action Input: [Tool Input]
-        Observation: [Tool Response]
-        Final Answer: [Your response to the user]
+        Action Input: [Input to the Tool]
+        Observation: [Result]
+        Final Answer: [Answer to the User]
 
-        Begin:
+        Begin!
 
-        Previous conversation history:
-        {chat_history}
-
-        New input: {input}
-
+        Question: {input}
         {agent_scratchpad}
         """
-        prompt_template = PromptTemplate(
-            template=template,
-            input_variables=["input", "chat_history", "agent_scratchpad"],
-            partial_variables={
-                "tools": tool_descriptions,
-                "tool_names": ", ".join([t.name for t in tools])
-            }
         )
 
-        # Create the ReAct agent
-        agent = create_react_agent(llm=llm, tools=tools, prompt=prompt_template)
+        # Create the ReAct agent with the prompt
+        agent = create_react_agent(
+            llm=llm,
+            tools=tools,
+            prompt=prompt_template.partial(
+                tools=tool_descriptions,
+                tool_names=tool_names
+            )
+        )
 
         # Create the AgentExecutor
         agent_executor = AgentExecutor(
@@ -276,8 +278,76 @@ def initialize_agent():
             tools=tools,
             handle_parsing_errors=True,
             verbose=True,
-            max_iterations=10
+            max_iterations=100
         )
+
+ollama_tools = [
+    {
+        'type': 'function',
+        'function': {
+            'name': 'discover_apis',
+            'description': 'Discover available NetBox APIs from a local JSON file.',
+            'parameters': {'type': 'object', 'properties': {}}
+        }
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'check_supported_url_tool',
+            'description': 'Check if an API URL or Name is supported by NetBox.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'api_url': {'type': 'string', 'description': 'API URL or Name to check'}
+                },
+                'required': ['api_url']
+            }
+        }
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'get_netbox_data_tool',
+            'description': 'Fetch data from NetBox using the specified API URL.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'api_url': {'type': 'string', 'description': 'API URL to fetch data from'}
+                },
+                'required': ['api_url']
+            }
+        }
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'create_netbox_data_tool',
+            'description': 'Create new data in NetBox.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'api_url': {'type': 'string', 'description': 'API URL to post data to'},
+                    'payload': {'type': 'object', 'description': 'Payload to send to NetBox'}
+                },
+                'required': ['api_url', 'payload']
+            }
+        }
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'delete_netbox_data_tool',
+            'description': 'Delete data from NetBox.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'api_url': {'type': 'string', 'description': 'API URL to delete data from'}
+                },
+                'required': ['api_url']
+            }
+        }
+    }
+]
 
 def chat_page():
     st.title("Chat with NetBox AI Agent")
@@ -285,47 +355,31 @@ def chat_page():
 
     initialize_agent()
 
-    # Initialize session state variables if not already set
     if "chat_history" not in st.session_state:
-        st.session_state.chat_history = ""
+        st.session_state.chat_history = []
 
-    if "conversation" not in st.session_state:
-        st.session_state.conversation = []
-
-    # Button to submit the question
     if st.button("Send"):
         if user_input:
-            # Add the user input to the conversation history
-            st.session_state.conversation.append({"role": "user", "content": user_input})
+            # Add user input to chat history
+            st.session_state.chat_history.append({"role": "user", "content": user_input})
 
-            # Invoke the agent with the user input and current chat history
             try:
+                # ✅ Use agent_executor to process user input
                 response = agent_executor.invoke({
                     "input": user_input,
                     "chat_history": st.session_state.chat_history,
-                    "agent_scratchpad": ""  # Initialize agent scratchpad as an empty string
+                    "agent_scratchpad": ""
                 })
 
-                # Process the agent's response
-                final_response = process_agent_response(response)
-
-                # Extract the final answer
-                final_answer = final_response.get('output', 'No answer provided.')
-
-                # Display the question and answer
-                st.write(f"**Question:** {user_input}")
+                # Extract and display the final answer
+                final_answer = response.get('output', 'No answer provided.')
                 st.write(f"**Answer:** {final_answer}")
 
-                # Add the response to the conversation history
-                st.session_state.conversation.append({"role": "assistant", "content": final_answer})
+                # Update chat history
+                st.session_state.chat_history.append({"role": "assistant", "content": final_answer})
 
-                # Update chat history with the new conversation
-                st.session_state.chat_history = "\n".join(
-                    [f"{entry['role'].capitalize()}: {entry['content']}" for entry in st.session_state.conversation]
-                )
             except Exception as e:
                 st.error(f"An error occurred: {str(e)}")
-
 
 # Page Navigation
 if 'page' not in st.session_state:
