@@ -158,15 +158,39 @@ def fetch_with_lookup(api_url: str):
     
     return {"error": f"Unsupported API URL. Closest match: {lookup_result.get('closest_url')}"}
 
-# Create NetBox Data Tool
+# ✅ Improved Create NetBox Data Tool
 create_netbox_data_tool = Tool(
     name="create_netbox_data_tool",
-    description="Create new data in NetBox.",
-    func=lambda input_data: NetBoxController(
-        netbox_url=os.getenv("NETBOX_URL"),
-        api_token=os.getenv("NETBOX_TOKEN")
-    ).post_api(input_data.get("api_url"), input_data.get("payload"))
+    description="Create new data in NetBox. Requires 'api_url' and 'payload'.",
+    func=lambda input_data: create_data_handler(input_data)
 )
+
+def create_data_handler(input_data):
+    if not isinstance(input_data, dict):
+        return {"error": "Invalid input. Expected a dictionary with 'api_url' and 'payload'."}
+
+    api_url = input_data.get("api_url")
+    payload = input_data.get("payload")
+
+    if not api_url or not isinstance(payload, dict):
+        return {"error": "Both 'api_url' and a valid 'payload' dictionary are required."}
+
+    try:
+        netbox_controller = NetBoxController(
+            netbox_url=os.getenv("NETBOX_URL"),
+            api_token=os.getenv("NETBOX_TOKEN")
+        )
+        response = netbox_controller.post_api(api_url, payload)
+        return {
+            "status": "success",
+            "message": f"Resource created successfully at {api_url}.",
+            "response": response
+        }
+
+    except requests.exceptions.HTTPError as http_err:
+        return {"error": f"HTTP error occurred: {http_err}"}
+    except Exception as e:
+        return {"error": f"Failed to create data: {str(e)}"}
 
 # Delete NetBox Data Tool
 delete_netbox_data_tool = Tool(
@@ -179,19 +203,25 @@ delete_netbox_data_tool = Tool(
 )
 
 def process_agent_response(response):
-    if response and response.get("status") == "supported" and "next_tool" in response.get("action", {}):
+    if not isinstance(response, dict):
+        logging.error(f"Unexpected response format: {response}")
+        return {"error": "Unexpected response format. Please check the input."}
+
+    if response.get("status") == "success":
+        return response
+
+    if response.get("status") == "supported" and "next_tool" in response.get("action", {}):
         next_tool = response["action"]["next_tool"]
         tool_input = response["action"]["input"]
 
-        # Automatically invoke the next tool
         return agent_executor.invoke({
             "input": tool_input,
             "chat_history": st.session_state.chat_history,
             "agent_scratchpad": "",
             "tool": next_tool
         })
-    else:
-        return response
+
+    return response
 
 # ============================================================
 # Streamlit App
@@ -221,43 +251,47 @@ def initialize_agent():
 
         # Define tools
         tools = [
-            discover_apis_tool,
-            check_supported_url_tool,
-            get_netbox_data_tool,
-            create_netbox_data_tool,
-            delete_netbox_data_tool
+           discover_apis_tool,
+           check_supported_url_tool,
+           get_netbox_data_tool,
+           create_netbox_data_tool,
+           delete_netbox_data_tool
         ]
 
         # Extract tool names for the prompt
         tool_names = ", ".join([tool.name for tool in tools])
-        tool_descriptions = "\n".join([f"{tool.name}: {tool.description}" for tool in tools])
-
+        tool_descriptions = "\n".join([f"{tool.name}: {tool.description.split('.')[0]}" for tool in tools])
         prompt_template = PromptTemplate(
-        input_variables=["input", "agent_scratchpad", "tool_names", "tools"],
-        template="""
+            input_variables=["input", "agent_scratchpad", "tool_names", "tools"],
+            template="""
         You are a helpful network assistant that manages NetBox data with CRUD operations.
 
         **TASK FLOW:**
 
-        1. **ALWAYS** check the correct API endpoint using the 'discover_apis' or 'check_supported_url_tool'.
-        2. Once the correct API URL is found, **fetch** the data using the 'get_netbox_data_tool'.
-        3. Analyze the data and **answer** the user.
+        1. **ALWAYS** check the correct API endpoint using 'discover_apis' or 'check_supported_url_tool'.
+        2. **READ** data using 'get_netbox_data_tool'.
+        3. **CREATE** data using 'create_netbox_data_tool'.
+        4. If the data answers the question, **STOP** and provide the answer.  
+        5. **DO NOT** perform additional actions once the task is complete.
 
-        TOOLS:
+        **IMPORTANT RULE:**  
+        ⚠️ **NEVER** provide both a Final Answer **and** an Action. Choose one.
+
+        **TOOLS:**  
         {tools}
 
         Available tool names: {tool_names}
 
-        Use the following format:
-        Thought: [Reasoning]
-        Action: [Tool Name]
-        Action Input: [Input to the Tool]
-        Observation: [Result]
-        Final Answer: [Answer to the User]
+        **FORMAT:**  
+        Thought: [Your reasoning]  
+        Action: [Tool Name]  
+        Action Input: [Input to the Tool in JSON format]  
+        Observation: [Result]  
+        Final Answer: [Answer to the User]  
 
         Begin!
 
-        Question: {input}
+        Question: {input}  
         {agent_scratchpad}
         """
         )
