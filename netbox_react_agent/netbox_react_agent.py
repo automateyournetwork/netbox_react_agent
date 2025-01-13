@@ -219,7 +219,7 @@ def initialize_agent():
     global llm, agent_executor
     if not llm:
         # Initialize the LLM with the API key from session state
-        llm = Ollama(model="llama3.2", base_url="http://ollama:11434")
+        llm = Ollama(model="phi4", base_url="http://ollama:11434")
 
         # Define tools
         tools = [discover_apis, check_supported_url_tool, get_netbox_data_tool, create_netbox_data_tool, delete_netbox_data_tool]
