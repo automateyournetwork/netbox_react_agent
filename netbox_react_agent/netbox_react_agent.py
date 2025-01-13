@@ -169,8 +169,9 @@ def create_data_handler(input_data):
     if not isinstance(input_data, dict):
         return {"error": "Invalid input. Expected a dictionary with 'api_url' and 'payload'."}
 
-    api_url = input_data.get("api_url")
-    payload = input_data.get("payload")
+    # ✅ Handle both 'url' and 'api_url' as input keys
+    api_url = input_data.get("api_url") or input_data.get("url")
+    payload = input_data.get("payload") or input_data.get("data")
 
     if not api_url or not isinstance(payload, dict):
         return {"error": "Both 'api_url' and a valid 'payload' dictionary are required."}
@@ -246,57 +247,68 @@ def configure_page():
 def initialize_agent():
     global llm, agent_executor
     if not llm:
-        # Initialize the LLM with the API key from session state
+        # Initialize Ollama with llama3.1 model
         llm = Ollama(model="llama3.1", base_url="http://ollama:11434")
 
-        # Define tools
+        # Ensure NetBox URL and Token are set
+        netbox_url = os.getenv("NETBOX_URL")
+        api_token = os.getenv("NETBOX_TOKEN")
+
+        if not netbox_url or not api_token:
+            st.error("NetBox URL or API Token is missing. Please configure them first.")
+            st.stop()  # Stop execution until configured
+
+        # ✅ Define tools correctly as Tool objects
         tools = [
-           discover_apis_tool,
-           check_supported_url_tool,
-           get_netbox_data_tool,
-           create_netbox_data_tool,
-           delete_netbox_data_tool
+            Tool(name="discover_apis", func=discover_apis, description="Discover available NetBox APIs."),
+            Tool(name="check_supported_url_tool", func=check_supported_url_tool, description="Check if a NetBox API URL or Name is supported."),
+            Tool(name="get_netbox_data_tool", func=get_netbox_data_tool, description="Fetch data from NetBox."),
+            Tool(name="create_netbox_data_tool", func=create_netbox_data_tool, description="Create new data in NetBox."),
+            Tool(name="delete_netbox_data_tool", func=delete_netbox_data_tool, description="Delete data from NetBox.")
         ]
 
-        # Extract tool names for the prompt
+        # Extract tool names and descriptions for the prompt
         tool_names = ", ".join([tool.name for tool in tools])
-        tool_descriptions = "\n".join([f"{tool.name}: {tool.description.split('.')[0]}" for tool in tools])
+        tool_descriptions = "\n".join([f"{tool.name}: {tool.description}" for tool in tools])
+
         prompt_template = PromptTemplate(
             input_variables=["input", "agent_scratchpad", "tool_names", "tools"],
-            template="""
-        You are a helpful network assistant that manages NetBox data with CRUD operations.
+            template=f"""
+            You are a network assistant managing NetBox data using CRUD operations.
 
-        **TASK FLOW:**
+            **TOOLS:**  
+            {tool_descriptions}
 
-        1. **ALWAYS** check the correct API endpoint using 'discover_apis' or 'check_supported_url_tool'.
-        2. **READ** data using 'get_netbox_data_tool'.
-        3. **CREATE** data using 'create_netbox_data_tool'.
-        4. If the data answers the question, **STOP** and provide the answer.  
-        5. **DO NOT** perform additional actions once the task is complete.
+            **Available Tool Names:**  
+            {tool_names}
 
-        **IMPORTANT RULE:**  
-        ⚠️ **NEVER** provide both a Final Answer **and** an Action. Choose one.
+            **FORMAT:**  
+            Thought: [Your reasoning]  
+            Action: [Tool Name]  
+            Action Input: [Input to the Tool]  
+            Observation: [Result]  
+            Final Answer: [Answer to the User]  
 
-        **TOOLS:**  
-        {tools}
+            **Example to create a new provider:**  
+            Thought: I need to create a new provider in NetBox.  
+            Action: create_netbox_data_tool  
+            Action Input: {{
+                "api_url": "/api/dcim/providers/",
+                "payload": {{
+                    "name": "Bell Canada",
+                    "slug": "bell"
+                }}
+            }}  
+            Observation: Provider created successfully.  
+            Final Answer: The new provider 'Bell Canada' has been created in NetBox.
 
-        Available tool names: {tool_names}
+            Begin!
 
-        **FORMAT:**  
-        Thought: [Your reasoning]  
-        Action: [Tool Name]  
-        Action Input: [Input to the Tool in JSON format]  
-        Observation: [Result]  
-        Final Answer: [Answer to the User]  
-
-        Begin!
-
-        Question: {input}  
-        {agent_scratchpad}
-        """
+            Question: {{{{input}}}}  
+            {{{{agent_scratchpad}}}}
+            """
         )
-
-        # Create the ReAct agent with the prompt
+        # Create the ReAct agent
         agent = create_react_agent(
             llm=llm,
             tools=tools,
@@ -312,7 +324,7 @@ def initialize_agent():
             tools=tools,
             handle_parsing_errors=True,
             verbose=True,
-            max_iterations=100
+            max_iterations=50
         )
 
 ollama_tools = [
@@ -382,6 +394,26 @@ ollama_tools = [
         }
     }
 ]
+
+def configure_page():
+    st.title("NetBox Configuration")
+    base_url = st.text_input("NetBox URL", placeholder="https://demo.netbox.dev")
+    api_token = st.text_input("NetBox API Token", type="password", placeholder="Your API Token")
+
+    if st.button("Save and Continue"):
+        if not base_url or not api_token:
+            st.error("All fields are required.")
+        else:
+            # Save the configuration to session state
+            st.session_state['NETBOX_URL'] = base_url
+            st.session_state['NETBOX_TOKEN'] = api_token
+
+            # Save to environment variables
+            os.environ['NETBOX_URL'] = base_url
+            os.environ['NETBOX_TOKEN'] = api_token
+
+            st.success("Configuration saved! Redirecting to chat...")
+            st.session_state['page'] = "chat"
 
 def chat_page():
     st.title("Chat with NetBox AI Agent")
