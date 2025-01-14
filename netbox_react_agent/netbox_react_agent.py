@@ -30,25 +30,32 @@ class NetBoxController:
         }
 
     def get_api(self, api_url: str, params: dict = None):
-        full_url = f"{self.netbox}/{api_url.lstrip('/')}"  # Fix URL construction
-        response = requests.get(
-            full_url,
-            headers=self.headers,
-            params=params,
-            verify=False
-        )
+        full_url = f"{self.netbox}/{api_url.lstrip('/')}"
+        response = requests.get(full_url, headers=self.headers, params=params, verify=False)
         response.raise_for_status()
         return response.json()
 
     def post_api(self, api_url: str, payload: dict):
-        response = requests.post(
-            f"{self.netbox}{api_url}",
-            headers=self.headers,
-            json=payload,
-            verify=False
-        )
-        response.raise_for_status()
-        return response.json()
+        full_url = f"{self.netbox}{api_url}"
+        logging.info(f"POST Request to URL: {full_url}")
+        logging.info(f"Headers: {self.headers}")
+        logging.info(f"Payload: {json.dumps(payload)}")
+    
+        try:
+            response = requests.post(
+                full_url,
+                headers=self.headers,
+                json=payload,
+                verify=False
+            )
+            logging.info(f"Response Status Code: {response.status_code}")
+            logging.info(f"Response Content: {response.text}")
+    
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logging.error(f"POST request failed: {e}")
+            return {"error": f"Request failed: {e}"}
 
     def delete_api(self, api_url: str):
         response = requests.delete(
@@ -78,21 +85,17 @@ def check_url_support(api_url: str) -> dict:
         return url_list  # Return error if loading URLs failed
 
     urls = [entry[0] for entry in url_list]
-    names = [entry[1] for entry in url_list]
 
-    close_url_matches = difflib.get_close_matches(api_url, urls, n=1, cutoff=0.6)
-    close_name_matches = difflib.get_close_matches(api_url, names, n=1, cutoff=0.6)
+    # Direct match should take priority
+    if api_url in urls:
+        return {"status": "supported", "closest_url": api_url}
 
-    if close_url_matches:
-        closest_url = close_url_matches[0]
-        matching_name = [entry[1] for entry in url_list if entry[0] == closest_url][0]
-        return {"status": "supported", "closest_url": closest_url, "closest_name": matching_name}
-    elif close_name_matches:
-        closest_name = close_name_matches[0]
-        closest_url = [entry[0] for entry in url_list if entry[1] == closest_name][0]
-        return {"status": "supported", "closest_url": closest_url, "closest_name": closest_name}
-    else:
-        return {"status": "unsupported", "message": f"The input '{api_url}' is not supported."}
+    # Use difflib for approximate matches
+    close_matches = difflib.get_close_matches(api_url, urls, n=1, cutoff=0.6)
+    if close_matches:
+        return {"status": "supported", "closest_url": close_matches[0]}
+
+    return {"status": "unsupported", "message": f"The input '{api_url}' is not supported."}
 
 def discover_apis():
     """
@@ -124,18 +127,14 @@ check_supported_url_tool = Tool(
     func=lambda query: check_url_support(query)
 )
 
-# Enhanced to ensure correct URL lookup before making API calls
 get_netbox_data_tool = Tool(
     name="get_netbox_data_tool",
-    description="Fetch data from NetBox using the correct API URL. Use 'check_supported_url_tool' first.",
-    func=lambda api_url: fetch_with_lookup(api_url)
+    description="Fetch data from NetBox using the correct API URL.",
+    func=lambda input_data: fetch_with_lookup(input_data.get("api_url"))  # No 'payload' needed for GET
 )
 
 def fetch_with_lookup(api_url: str):
-    """
-    Check if the API URL is supported before making a request.
-    """
-    # Step 1: Lookup the correct API endpoint
+    # Validate the API URL
     lookup_result = check_url_support(api_url)
     
     if lookup_result.get("status") == "supported":
@@ -145,13 +144,16 @@ def fetch_with_lookup(api_url: str):
                 netbox_url=os.getenv("NETBOX_URL"),
                 api_token=os.getenv("NETBOX_TOKEN")
             )
-            # Step 2: Fetch the data
+
+            # Fetch the data from the correct URL
             data = netbox_controller.get_api(correct_url)
-            
-            # Step 3: Count circuits if applicable
-            if 'count' in data:
-                return {"status": "success", "message": f"You have {data['count']} circuits in NetBox."}
-            return {"status": "success", "message": "Data fetched successfully."}
+
+            # Check if data includes 'results' (typical in paginated APIs)
+            if isinstance(data, dict) and 'results' in data:
+                circuit_count = len(data['results'])
+                return {"status": "success", "message": f"You have {circuit_count} circuits in NetBox.", "data": data}
+
+            return {"status": "success", "message": "Data fetched successfully.", "data": data}
 
         except Exception as e:
             return {"error": f"Failed to fetch data: {str(e)}"}
@@ -169,9 +171,9 @@ def create_data_handler(input_data):
     if not isinstance(input_data, dict):
         return {"error": "Invalid input. Expected a dictionary with 'api_url' and 'payload'."}
 
-    # ✅ Handle both 'url' and 'api_url' as input keys
-    api_url = input_data.get("api_url") or input_data.get("url")
-    payload = input_data.get("payload") or input_data.get("data")
+    # Correctly handle 'api_url' and 'payload' keys
+    api_url = input_data.get("api_url")
+    payload = input_data.get("payload")
 
     if not api_url or not isinstance(payload, dict):
         return {"error": "Both 'api_url' and a valid 'payload' dictionary are required."}
@@ -182,6 +184,7 @@ def create_data_handler(input_data):
             api_token=os.getenv("NETBOX_TOKEN")
         )
         response = netbox_controller.post_api(api_url, payload)
+        logging.info(f"POST Request to {api_url} with payload: {json.dumps(payload)}")
         return {
             "status": "success",
             "message": f"Resource created successfully at {api_url}.",
@@ -271,61 +274,64 @@ def initialize_agent():
         tool_names = ", ".join([tool.name for tool in tools])
         tool_descriptions = "\n".join([f"{tool.name}: {tool.description}" for tool in tools])
 
+        # Correct PromptTemplate with escaped curly braces
         prompt_template = PromptTemplate(
             input_variables=["input", "agent_scratchpad", "tool_names", "tools"],
             template=f"""
             You are a network assistant managing NetBox data using CRUD operations.
-
+        
             **TOOLS:**  
-            {tool_descriptions}
-
+            {{tools}}
+        
             **Available Tool Names:**  
-            {tool_names}
-
+            {{tool_names}}
+        
             **FORMAT:**  
             Thought: [Your reasoning]  
             Action: [Tool Name]  
             Action Input: [Input to the Tool]  
             Observation: [Result]  
             Final Answer: [Answer to the User]  
-
+        
             **Example to create a new provider:**  
             Thought: I need to create a new provider in NetBox.  
             Action: create_netbox_data_tool  
-            Action Input: {{
+            Action Input: {{{{
                 "api_url": "/api/dcim/providers/",
-                "payload": {{
+                "payload": {{{{
                     "name": "Bell Canada",
                     "slug": "bell"
-                }}
-            }}  
+                }}}}
+            }}}}
+        
+            Adhere to the JSON structure above. 
+
             Observation: Provider created successfully.  
             Final Answer: The new provider 'Bell Canada' has been created in NetBox.
-
+        
             Begin!
-
-            Question: {{{{input}}}}  
-            {{{{agent_scratchpad}}}}
+        
+            Question: {{input}}
+            {{agent_scratchpad}}
             """
         )
-        # Create the ReAct agent
-        agent = create_react_agent(
-            llm=llm,
-            tools=tools,
-            prompt=prompt_template.partial(
-                tools=tool_descriptions,
-                tool_names=tool_names
-            )
-        )
 
-        # Create the AgentExecutor
-        agent_executor = AgentExecutor(
-            agent=agent,
-            tools=tools,
-            handle_parsing_errors=True,
-            verbose=True,
-            max_iterations=50
-        )
+    # Create the ReAct agent without using `.partial()`
+    agent = create_react_agent(
+        llm=llm,
+        tools=tools,
+        prompt=prompt_template
+    )
+
+    # Create the AgentExecutor
+    agent_executor = AgentExecutor(
+        agent=agent,
+        tools=tools,
+        handle_parsing_errors=True,
+        verbose=True,
+        max_iterations=50
+    )
+
 
 ollama_tools = [
     {
@@ -433,7 +439,6 @@ def chat_page():
                 # ✅ Use agent_executor to process user input
                 response = agent_executor.invoke({
                     "input": user_input,
-                    "chat_history": st.session_state.chat_history,
                     "agent_scratchpad": ""
                 })
 
