@@ -134,9 +134,8 @@ get_netbox_data_tool = Tool(
 )
 
 def fetch_with_lookup(api_url: str):
-    # Validate the API URL
     lookup_result = check_url_support(api_url)
-    
+
     if lookup_result.get("status") == "supported":
         correct_url = lookup_result["closest_url"]
         try:
@@ -144,20 +143,15 @@ def fetch_with_lookup(api_url: str):
                 netbox_url=os.getenv("NETBOX_URL"),
                 api_token=os.getenv("NETBOX_TOKEN")
             )
-
-            # Fetch the data from the correct URL
             data = netbox_controller.get_api(correct_url)
 
-            # Check if data includes 'results' (typical in paginated APIs)
             if isinstance(data, dict) and 'results' in data:
-                circuit_count = len(data['results'])
-                return {"status": "success", "message": f"You have {circuit_count} circuits in NetBox.", "data": data}
+                return {"status": "success", "message": f"Found {len(data['results'])} items.", "data": data}
 
             return {"status": "success", "message": "Data fetched successfully.", "data": data}
 
         except Exception as e:
-            return {"error": f"Failed to fetch data: {str(e)}"}
-    
+            return {"error": f"GET request failed: {str(e)}"}
     return {"error": f"Unsupported API URL. Closest match: {lookup_result.get('closest_url')}"}
 
 # ✅ Improved Create NetBox Data Tool
@@ -168,10 +162,6 @@ create_netbox_data_tool = Tool(
 )
 
 def create_data_handler(input_data):
-    if not isinstance(input_data, dict):
-        return {"error": "Invalid input. Expected a dictionary with 'api_url' and 'payload'."}
-
-    # Correctly handle 'api_url' and 'payload' keys
     api_url = input_data.get("api_url")
     payload = input_data.get("payload")
 
@@ -184,22 +174,17 @@ def create_data_handler(input_data):
             api_token=os.getenv("NETBOX_TOKEN")
         )
         response = netbox_controller.post_api(api_url, payload)
-        logging.info(f"POST Request to {api_url} with payload: {json.dumps(payload)}")
-        return {
-            "status": "success",
-            "message": f"Resource created successfully at {api_url}.",
-            "response": response
-        }
+        return {"status": "success", "message": f"Created resource at {api_url}.", "response": response}
 
     except requests.exceptions.HTTPError as http_err:
-        return {"error": f"HTTP error occurred: {http_err}"}
+        return {"error": f"HTTP error: {http_err}"}
     except Exception as e:
-        return {"error": f"Failed to create data: {str(e)}"}
+        return {"error": f"POST request failed: {str(e)}"}
 
 # Delete NetBox Data Tool
 delete_netbox_data_tool = Tool(
     name="delete_netbox_data_tool",
-    description="Delete data from NetBox.",
+    description="Delete data in NetBox using an API URL.",
     func=lambda api_url: NetBoxController(
         netbox_url=os.getenv("NETBOX_URL"),
         api_token=os.getenv("NETBOX_TOKEN")
@@ -249,157 +234,75 @@ def configure_page():
 
 def initialize_agent():
     global llm, agent_executor
+
     if not llm:
-        # Initialize Ollama with llama3.1 model
         llm = Ollama(model="llama3.1", base_url="http://ollama:11434")
 
-        # Ensure NetBox URL and Token are set
-        netbox_url = os.getenv("NETBOX_URL")
-        api_token = os.getenv("NETBOX_TOKEN")
-
-        if not netbox_url or not api_token:
-            st.error("NetBox URL or API Token is missing. Please configure them first.")
-            st.stop()  # Stop execution until configured
-
-        # ✅ Define tools correctly as Tool objects
+        # ✅ Define the tools
         tools = [
             Tool(name="discover_apis", func=discover_apis, description="Discover available NetBox APIs."),
-            Tool(name="check_supported_url_tool", func=check_supported_url_tool, description="Check if a NetBox API URL or Name is supported."),
-            Tool(name="get_netbox_data_tool", func=get_netbox_data_tool, description="Fetch data from NetBox."),
-            Tool(name="create_netbox_data_tool", func=create_netbox_data_tool, description="Create new data in NetBox."),
-            Tool(name="delete_netbox_data_tool", func=delete_netbox_data_tool, description="Delete data from NetBox.")
+            Tool(name="check_supported_url_tool", func=check_url_support, description="Check if a NetBox API URL or Name is supported."),
+            Tool(name="get_netbox_data_tool", func=fetch_with_lookup, description="Fetch data from NetBox using a valid API URL."),
+            Tool(name="create_netbox_data_tool", func=create_data_handler, description="Create new data in NetBox with an API URL and payload."),
+            Tool(name="delete_netbox_data_tool", func=lambda api_url: NetBoxController(
+                netbox_url=os.getenv("NETBOX_URL"),
+                api_token=os.getenv("NETBOX_TOKEN")
+            ).delete_api(api_url), description="Delete data in NetBox using an API URL.")
         ]
 
-        # Extract tool names and descriptions for the prompt
+        # Extract tool names and descriptions
         tool_names = ", ".join([tool.name for tool in tools])
         tool_descriptions = "\n".join([f"{tool.name}: {tool.description}" for tool in tools])
 
-        # Correct PromptTemplate with escaped curly braces
+        # ✅ Updated PromptTemplate
         prompt_template = PromptTemplate(
             input_variables=["input", "agent_scratchpad", "tool_names", "tools"],
             template=f"""
             You are a network assistant managing NetBox data using CRUD operations.
-        
+
             **TOOLS:**  
             {{tools}}
-        
-            **Available Tool Names:**  
+
+            **Available Tool Names (use exactly as written):**  
             {{tool_names}}
-        
+
             **FORMAT:**  
             Thought: [Your reasoning]  
             Action: [Tool Name]  
             Action Input: [Input to the Tool]  
             Observation: [Result]  
             Final Answer: [Answer to the User]  
-        
-            **Example to create a new provider:**  
-            Thought: I need to create a new provider in NetBox.  
-            Action: create_netbox_data_tool  
-            Action Input: {{{{
-                "api_url": "/api/dcim/providers/",
-                "payload": {{{{
-                    "name": "Bell Canada",
-                    "slug": "bell"
-                }}}}
-            }}}}
-        
-            Adhere to the JSON structure above. 
 
-            Observation: Provider created successfully.  
-            Final Answer: The new provider 'Bell Canada' has been created in NetBox.
-        
-            Begin!
-        
+            **Examples:**  
+            - To fetch all circuits, use `get_netbox_data_tool` with the API URL `/api/circuits`.  
+            - To create a provider, use `create_netbox_data_tool` with the API URL `/api/dcim/providers/` and provide a payload.  
+            - To delete a device, use `delete_netbox_data_tool` with the API URL `/api/dcim/devices/ID/`.
+
+            **Begin!**
+
             Question: {{input}}
             {{agent_scratchpad}}
             """
         )
 
-    # Create the ReAct agent without using `.partial()`
-    agent = create_react_agent(
-        llm=llm,
-        tools=tools,
-        prompt=prompt_template
-    )
+        # ✅ Pass 'tool_names' and 'tools' to the agent
+        agent = create_react_agent(
+            llm=llm,
+            tools=tools,
+            prompt=prompt_template.partial(
+                tool_names=tool_names,
+                tools=tool_descriptions
+            )
+        )
 
-    # Create the AgentExecutor
-    agent_executor = AgentExecutor(
-        agent=agent,
-        tools=tools,
-        handle_parsing_errors=True,
-        verbose=True,
-        max_iterations=50
-    )
-
-
-ollama_tools = [
-    {
-        'type': 'function',
-        'function': {
-            'name': 'discover_apis',
-            'description': 'Discover available NetBox APIs from a local JSON file.',
-            'parameters': {'type': 'object', 'properties': {}}
-        }
-    },
-    {
-        'type': 'function',
-        'function': {
-            'name': 'check_supported_url_tool',
-            'description': 'Check if an API URL or Name is supported by NetBox.',
-            'parameters': {
-                'type': 'object',
-                'properties': {
-                    'api_url': {'type': 'string', 'description': 'API URL or Name to check'}
-                },
-                'required': ['api_url']
-            }
-        }
-    },
-    {
-        'type': 'function',
-        'function': {
-            'name': 'get_netbox_data_tool',
-            'description': 'Fetch data from NetBox using the specified API URL.',
-            'parameters': {
-                'type': 'object',
-                'properties': {
-                    'api_url': {'type': 'string', 'description': 'API URL to fetch data from'}
-                },
-                'required': ['api_url']
-            }
-        }
-    },
-    {
-        'type': 'function',
-        'function': {
-            'name': 'create_netbox_data_tool',
-            'description': 'Create new data in NetBox.',
-            'parameters': {
-                'type': 'object',
-                'properties': {
-                    'api_url': {'type': 'string', 'description': 'API URL to post data to'},
-                    'payload': {'type': 'object', 'description': 'Payload to send to NetBox'}
-                },
-                'required': ['api_url', 'payload']
-            }
-        }
-    },
-    {
-        'type': 'function',
-        'function': {
-            'name': 'delete_netbox_data_tool',
-            'description': 'Delete data from NetBox.',
-            'parameters': {
-                'type': 'object',
-                'properties': {
-                    'api_url': {'type': 'string', 'description': 'API URL to delete data from'}
-                },
-                'required': ['api_url']
-            }
-        }
-    }
-]
+        # ✅ AgentExecutor with error handling
+        agent_executor = AgentExecutor(
+            agent=agent,
+            tools=tools,
+            handle_parsing_errors=True,
+            verbose=True,
+            max_iterations=50
+        )
 
 def configure_page():
     st.title("NetBox Configuration")
