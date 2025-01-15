@@ -58,15 +58,31 @@ class NetBoxController:
             return {"error": f"Request failed: {e}"}
 
     def delete_api(self, api_url: str):
-        response = requests.delete(
-            f"{self.netbox}{api_url}",
-            headers=self.headers,
-            verify=False
-        )
-        response.raise_for_status()
-        return response.json()
+        full_url = f"{self.netbox}{api_url}"
+        logging.info(f"🗑️ DELETE Request to URL: {full_url}")
+        logging.info(f"Headers: {self.headers}")
 
+        try:
+            response = requests.delete(
+                full_url,
+                headers=self.headers,
+                verify=False
+            )
 
+            logging.info(f"📡 Response Status Code: {response.status_code}")
+            logging.info(f"📦 Response Content: {response.text}")
+
+            if response.status_code == 204:
+                logging.info(f"✅ Deletion successful for {full_url}")
+                return {"status": "success", "message": "Deletion successful."}
+            else:
+                logging.warning(f"⚠️ Deletion failed. Status code: {response.status_code}")
+                return {"error": f"Failed to delete. Status code: {response.status_code}"}
+
+        except requests.exceptions.RequestException as e:
+            logging.error(f"❌ DELETE request failed: {e}")
+            return {"error": f"Request failed: {e}"}
+        
 # Function to load supported URLs with their names from a JSON file
 def load_urls(file_path='netbox_apis.json'):
     if not os.path.exists(file_path):
@@ -162,6 +178,12 @@ create_netbox_data_tool = Tool(
 )
 
 def create_data_handler(input_data):
+    if isinstance(input_data, str):
+        try:
+            input_data = json.loads(input_data)
+        except json.JSONDecodeError:
+            return {"error": "Invalid JSON input. Expected a JSON object."}
+
     api_url = input_data.get("api_url")
     payload = input_data.get("payload")
 
@@ -174,21 +196,77 @@ def create_data_handler(input_data):
             api_token=os.getenv("NETBOX_TOKEN")
         )
         response = netbox_controller.post_api(api_url, payload)
-        return {"status": "success", "message": f"Created resource at {api_url}.", "response": response}
+        return {
+            "status": "success",
+            "message": f"Successfully created resource at {api_url}.",
+            "response": response
+        }
 
     except requests.exceptions.HTTPError as http_err:
-        return {"error": f"HTTP error: {http_err}"}
+        return {"error": f"HTTP error occurred: {http_err}"}
     except Exception as e:
         return {"error": f"POST request failed: {str(e)}"}
 
-# Delete NetBox Data Tool
+def delete_data_handler(input_data):
+    logging.info("🚀 delete_data_handler was called.")
+    logging.info(f"📝 Input Data: {json.dumps(input_data, indent=2)}")
+
+    if isinstance(input_data, str):
+        try:
+            input_data = json.loads(input_data)
+        except json.JSONDecodeError:
+            logging.error("❌ Invalid JSON input provided to delete_data_handler.")
+            return {"error": "Invalid JSON input. Expected a JSON object."}
+
+    api_url = input_data.get("api_url")
+    payload = input_data.get("payload", {})
+    name = payload.get("name")
+
+    if not api_url or not name:
+        logging.error("❌ Missing 'api_url' or 'name' in payload.")
+        return {"error": "Both 'api_url' and 'payload' with 'name' are required."}
+
+    try:
+        logging.info(f"🔍 Looking up provider '{name}' at {api_url}")
+
+        netbox_controller = NetBoxController(
+            netbox_url=os.getenv("NETBOX_URL"),
+            api_token=os.getenv("NETBOX_TOKEN")
+        )
+
+        # Lookup entity by name to get its ID
+        lookup_response = netbox_controller.get_api(api_url, params={'name': name})
+        logging.info(f"📦 Lookup response: {json.dumps(lookup_response, indent=2)}")
+
+        if lookup_response.get('count', 0) == 0:
+            logging.warning(f"⚠️ No provider found with the name '{name}'.")
+            return {"error": f"No resource found at '{api_url}' with name '{name}'."}
+
+        entity_id = lookup_response['results'][0]['id']
+        delete_url = f"{api_url.rstrip('/')}/{entity_id}/"
+
+        logging.info(f"🗑️ Preparing to DELETE at {delete_url}")
+
+        # Perform the deletion
+        delete_response = netbox_controller.delete_api(delete_url)
+        logging.info(f"📝 DELETE response: {delete_response}")
+
+        if delete_response.get("status") == "success":
+            return {
+                "status": "success",
+                "message": f"Successfully deleted '{name}' at {api_url}."
+            }
+        else:
+            return {"error": delete_response.get("error", "Unknown error during deletion.")}
+
+    except Exception as e:
+        logging.error(f"❌ Error in delete_data_handler: {e}")
+        return {"error": f"Error deleting data: {str(e)}"}
+    
 delete_netbox_data_tool = Tool(
     name="delete_netbox_data_tool",
-    description="Delete data in NetBox using an API URL.",
-    func=lambda api_url: NetBoxController(
-        netbox_url=os.getenv("NETBOX_URL"),
-        api_token=os.getenv("NETBOX_TOKEN")
-    ).delete_api(api_url)
+    description="Delete data in NetBox. Requires 'api_url' and 'payload' with 'name'.",
+    func=delete_data_handler
 )
 
 def process_agent_response(response):
@@ -236,7 +314,7 @@ def initialize_agent():
     global llm, agent_executor
 
     if not llm:
-        llm = Ollama(model="llama3.1", base_url="http://ollama:11434")
+        llm = Ollama(model="command-r7b", base_url="http://ollama:11434")
 
         # ✅ Define the tools
         tools = [
@@ -244,10 +322,7 @@ def initialize_agent():
             Tool(name="check_supported_url_tool", func=check_url_support, description="Check if a NetBox API URL or Name is supported."),
             Tool(name="get_netbox_data_tool", func=fetch_with_lookup, description="Fetch data from NetBox using a valid API URL."),
             Tool(name="create_netbox_data_tool", func=create_data_handler, description="Create new data in NetBox with an API URL and payload."),
-            Tool(name="delete_netbox_data_tool", func=lambda api_url: NetBoxController(
-                netbox_url=os.getenv("NETBOX_URL"),
-                api_token=os.getenv("NETBOX_TOKEN")
-            ).delete_api(api_url), description="Delete data in NetBox using an API URL.")
+            Tool(name="delete_netbox_data_tool", func=delete_data_handler, description="Delete data in NetBox with an API URL and payload."),
         ]
 
         # Extract tool names and descriptions
@@ -257,33 +332,59 @@ def initialize_agent():
         # ✅ Updated PromptTemplate
         prompt_template = PromptTemplate(
             input_variables=["input", "agent_scratchpad", "tool_names", "tools"],
-            template=f"""
+            template="""
             You are a network assistant managing NetBox data using CRUD operations.
 
             **TOOLS:**  
-            {{tools}}
+            {tools}
 
             **Available Tool Names (use exactly as written):**  
-            {{tool_names}}
+            {tool_names}
 
             **FORMAT:**  
             Thought: [Your reasoning]  
             Action: [Tool Name]  
-            Action Input: [Input to the Tool]  
+            Action Input: [Input to the Tool as JSON]  
             Observation: [Result]  
             Final Answer: [Answer to the User]  
 
             **Examples:**  
-            - To fetch all circuits, use `get_netbox_data_tool` with the API URL `/api/circuits`.  
-            - To create a provider, use `create_netbox_data_tool` with the API URL `/api/dcim/providers/` and provide a payload.  
-            - To delete a device, use `delete_netbox_data_tool` with the API URL `/api/dcim/devices/ID/`.
+            - To fetch all circuits:  
+              Thought: I need to retrieve all circuits from NetBox.  
+              Action: get_netbox_data_tool  
+              Action Input: {{ "api_url": "/api/circuits/" }}
+
+            - To create a provider called "Bell Canada":  
+              Thought: I need to create a provider named 'Bell Canada' with the slug 'bell'.  
+              Action: create_netbox_data_tool  
+              Action Input: {{ 
+                "api_url": "/api/circuits/providers/", 
+                "payload": {{ 
+                  "name": "Bell Canada", 
+                  "slug": "bell" 
+                }} 
+              }}
+
+
+            - To delete a provider called "Bell Canada":  
+              Thought: I need to create a provider named 'Bell Canada' with the slug 'bell'.  
+              Action: delete_netbox_data_tool  
+              Action Input: {{ 
+                "api_url": "/api/circuits/providers/", 
+                "payload": {{ 
+                  "name": "Bell Canada",
+                  "slug": "bell" 
+                }} 
+              }}
 
             **Begin!**
 
-            Question: {{input}}
-            {{agent_scratchpad}}
+            Question: {input}  
+            {agent_scratchpad}
             """
         )
+
+        logging.info(f"🛠️ Registered tools: {[tool.name for tool in tools]}")
 
         # ✅ Pass 'tool_names' and 'tools' to the agent
         agent = create_react_agent(
@@ -303,7 +404,8 @@ def initialize_agent():
             verbose=True,
             max_iterations=50
         )
-
+        logging.info("🚀 AgentExecutor initialized with tools.")
+        
 def configure_page():
     st.title("NetBox Configuration")
     base_url = st.text_input("NetBox URL", placeholder="https://demo.netbox.dev")
@@ -339,12 +441,16 @@ def chat_page():
             st.session_state.chat_history.append({"role": "user", "content": user_input})
 
             try:
+                logging.info(f"📝 User input: {user_input}")
+
                 # ✅ Use agent_executor to process user input
                 response = agent_executor.invoke({
                     "input": user_input,
                     "agent_scratchpad": ""
                 })
 
+                logging.info(f"🤖 Agent response: {response}")
+                
                 # Extract and display the final answer
                 final_answer = response.get('output', 'No answer provided.')
                 st.write(f"**Answer:** {final_answer}")
