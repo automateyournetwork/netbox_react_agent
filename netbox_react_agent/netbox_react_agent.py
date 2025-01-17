@@ -365,7 +365,6 @@ def initialize_agent():
                 }} 
               }}
 
-
             - To delete a provider called "Bell Canada":  
               Thought: I need to create a provider named 'Bell Canada' with the slug 'bell'.  
               Action: delete_netbox_data_tool  
